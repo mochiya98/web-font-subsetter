@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Web Font Subsetter</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=Material+Symbols+Sharp:opsz,wght,FILL,GRAD@24,400,0,0");
+      @import url("https://fonts.googleapis.com/css2?family=M+PLUS+1+Code:wght@100;200;300;400;500;600;700&family=Roboto+Mono:wght@100;200;300;400;500;600;700&display=swap");
+      * {
+        margin: 0;
+        padding: 0;
+      }
+      body {
+        background-color: #000;
+        color: #fff;
+        font-family: "Roboto Mono", "M PLUS 1 Code", sans-serif;
+        font-size: 16px;
+        line-height: 1.3;
+        transition: background-color 0.3s ease;
+      }
+      .dragover body {
+        background-color: #222;
+      }
+      .app {
+        max-width: 700px;
+        margin: 0 auto;
+        padding: 10px;
+      }
+      .app-result {
+        display: none;
+      }
+      .apptitle,
+      .fontname {
+        font-weight: inherit;
+        font-size: 30px;
+      }
+      .appdesc,
+      .fontdesc {
+        font-size: 14px;
+        color: #999;
+      }
+      .progressboxlist {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+      }
+      .progressboxlist div {
+        width: 16px;
+        height: 16px;
+        background-color: #333;
+        transition: background-color 0.3s ease;
+      }
+      .progressboxlist div.done {
+        background-color: #0ff;
+      }
+      .app hr {
+        height: 0;
+        border: 1px solid #333;
+        margin: 10px 0;
+      }
+      .dllinks {
+        display: flex;
+        gap: 10px;
+        margin: 10px;
+      }
+      .dllinks > a {
+        position: relative;
+        display: block;
+        flex: 1;
+        min-width: 0;
+        color: inherit;
+        text-decoration: none;
+        border: 1px solid #444;
+        border-radius: 5px;
+        padding: 10px 15px;
+        padding-left: 70px;
+        transition: background-color 0.15s ease-out;
+      }
+      .dllinks > a[href]:before {
+        content: "\f090";
+        font-family: "Material Symbols Sharp";
+        display: block;
+        position: absolute;
+        top: 9px;
+        left: 10px;
+        font-size: 48px;
+        line-height: 1;
+      }
+      .dllinks > a:not(a[href]) {
+        opacity: 0.75;
+        background-color: #222;
+        cursor: default;
+      }
+      .dllinks > a:not(a[href]):before {
+        content: "";
+        display: block;
+        position: absolute;
+        top: 13px;
+        left: 15px;
+        width: 32px;
+        height: 32px;
+        border: 4px solid #333;
+        border-top-color: #fff;
+        border-radius: 50%;
+        animation: rotate 1s linear infinite;
+      }
+      .dllinks > a[href]:hover {
+        background-color: #333;
+      }
+      .filename {
+        font-size: 20px;
+        display: flex;
+      }
+      .filenamehead {
+        flex: 1;
+        min-width: 0;
+        max-width: max-content;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .filedesc {
+        font-size: 14px;
+        color: #999;
+      }
+      .dropzone {
+        position: relative;
+        margin: 10px 0;
+        text-align: center;
+        padding: 40px 10px;
+        border: 4px dashed #999;
+        border-radius: 10px;
+        color: #ddd;
+        line-height: 1;
+        cursor: pointer;
+        transition: background-color 0.3s ease;
+      }
+      .dropzone-input {
+        position: absolute;
+        top: 0;
+        left: 0;
+        opacity: 0;
+      }
+      .dragover .dropzone,
+      .dropzone:hover {
+        border-color: #fff;
+        color: #fff;
+        background-color: #222;
+      }
+      .dropzone-icon {
+        font-family: "Material Symbols Sharp";
+        font-size: 48px;
+        margin-bottom: 20px;
+      }
+
+      @keyframes rotate {
+        0% {
+          transform: rotate(0deg);
+        }
+        100% {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <div class="app-start">
+        <h1 class="apptitle">Web Font Subsetter</h1>
+        <p class="appdesc">@mochiya98</p>
+        <hr />
+        <p>
+          このツールを使うとGoogle
+          fontsの日本語フォントと同じ120個に分割されたサブセットを簡単に生成することができます。
+        </p>
+        <p>
+          フォントファイルをドラッグアンドドロップすると、変換処理が始まります。
+        </p>
+        <div class="dropzone">
+          <input type="file" class="dropzone-input" />
+          <div class="dropzone-icon">&#59900;</div>
+          <div class="dropzone-text">Drop font file here</div>
+        </div>
+      </div>
+      <div class="app-result">
+        <h1 class="fontname">Loading...</h1>
+        <p class="fontdesc">weight=100, glyphs=0</p>
+        <hr />
+        <div class="dllinks">
+          <a id="link-ansi">
+            <div class="filename">
+              <div class="filenamehead">x</div>
+              -ansi.woff2
+            </div>
+            <div class="filedesc">ANSI only</div>
+          </a>
+          <a id="link-jp120">
+            <div class="filename">
+              <div class="filenamehead">x</div>
+              -jp120.zip
+            </div>
+            <div class="filedesc">120 chunks</div>
+          </a>
+        </div>
+        <div class="progressboxlist"></div>
+      </div>
+    </div>
+
+    <script src="./jszip.min.js"></script>
+    <script>
+      const progressboxlist = document.querySelector(".progressboxlist");
+      const progressboxes = [...new Array(121)].map(() =>
+        progressboxlist.appendChild(document.createElement("div"))
+      );
+      const unicodeRangesPromise = fetch(
+        "https://fonts.googleapis.com/css2?family=Noto+Sans+JP"
+      )
+        .then((c) => c.text())
+        .then((c) =>
+          c.match(/unicode-range:\s*[^;]+/g).map((c) => c.slice(14).trimStart())
+        );
+      const workerScript = `
+            importScripts("${
+              location.origin.startsWith("http")
+                ? location.href.replace(/\/[^/]*$/, "/pyodide/")
+                : "https://cdn.jsdelivr.net/pyodide/v0.24.0/full/"
+            }pyodide.js");
+
+            let pyodide;
+            async function loadPyodideAndPackages() {
+              pyodide = await loadPyodide();
+              self.postMessage({ type:"pyodide_loaded" });
+              await pyodide.loadPackage(["fonttools","brotli"]);
+              self.postMessage({ type:"pyodide_lib_loaded" });
+            }
+            let pyodideReadyPromise = loadPyodideAndPackages();
+            let inputFontFileData = null;
+            let inputFontFileLoadIdx = 0;
+            let sid = null;
+
+            self.onmessage = async (event) => {
+              let result = 0;
+              let {id, type} = event.data;
+              if(type==="init")sid=event.data.sid;
+              try{
+                if(event.data.sid!==sid)throw new Error("invalid sid");
+                if(type==="load_file_start"){
+                  inputFontFileData=new Uint8Array(event.data.size);
+                  inputFontFileLoadIdx = 0;
+                  sid=event.data.sid;
+                }else if(type==="load_file_chunk"){
+                  inputFontFileData.set(event.data.chunk, inputFontFileLoadIdx);
+                  inputFontFileLoadIdx += event.data.chunk.length;
+                }else if(type==="load_file_end"){
+                  await (async (data)=>{
+                      await pyodideReadyPromise;
+                      pyodide.FS.writeFile("/tmp.bin", data);
+                  })(inputFontFileData);
+                  let [glyphs,weight,familyName,name] = await pyodide.runPythonAsync("from fontTools import ttLib\\nfont=ttLib.TTFont('/tmp.bin')\\n(len(font.getGlyphOrder()),font['OS/2'].usWeightClass,font['name'].getDebugName(16) or font['name'].getDebugName(1),font['name'].getDebugName(4),)");
+                  pyodide.FS.rename("/tmp.bin", "/input.bin");
+                  result = {glyphs,weight,familyName,name};
+                }else if(type==="make_subset"){
+                  const subsetMain = await pyodide.runPythonAsync("from fontTools.subset import main\\nmain")
+                  subsetMain(['/input.bin','--output-file=/out.woff2','--flavor=woff2','--desubroutinize','--layout-features=*','--unicodes='+event.data.u]);
+                  result = pyodide.FS.readFile("/out.woff2");
+                }
+              }catch(e){
+                result = -1;
+              }
+              self.postMessage({ id, result });
+            };
+            `;
+      const WORKER_TRANSFER_CHUNK_SIZE = 102400;
+      const pyodideWorker = new Worker(
+        URL.createObjectURL(
+          new Blob([workerScript], {
+            type: "text/javascript",
+          })
+        )
+      );
+      let pyodideWorkerCallbacks = {};
+      let currentSid = null;
+      const startPyodidePipeline = async () => {
+        Object.values(pyodideWorkerCallbacks).map((c) => c.reject(-1));
+        pyodideWorkerCallbacks = {};
+        const sid = Math.random().toString(36).slice(2);
+        currentSid = sid;
+        const waitPromise = async (promise) => {
+          const result = await promise;
+          if (currentSid !== sid) throw new Error();
+          return result;
+        };
+        const runInPyodideWorker = (data) => {
+          const id = Math.random().toString(36).slice(2);
+          return waitPromise(
+            new Promise((resolve, reject) => {
+              pyodideWorkerCallbacks[id] = { resolve, reject };
+              pyodideWorker.postMessage({ id, sid, ...data });
+            })
+          );
+        };
+        pyodideWorker.postMessage({ id: null, sid, type: "init" });
+        return { runInPyodideWorker, waitPromise };
+      };
+
+      const loadFileFromArrayBuffer = async (fn, ab) => {
+        const { runInPyodideWorker, waitPromise } =
+          await startPyodidePipeline();
+        document.querySelector(".app-start").style.display = "none";
+        document.querySelector(".app-result").style.display = "block";
+        document.querySelector(".fontname").textContent = "Loading...";
+        if (document.querySelector("#link-ansi").href) {
+          URL.revokeObjectURL(document.querySelector("#link-ansi").href);
+        }
+        if (document.querySelector("#link-jp120").href) {
+          URL.revokeObjectURL(document.querySelector("#link-jp120").href);
+        }
+        document.querySelector("#link-ansi").removeAttribute("href");
+        document.querySelector("#link-jp120").removeAttribute("href");
+        progressboxes.forEach((c) => c.classList.remove("done"));
+        const chunkName = fn.replace(/\.[^.]+$/, "");
+        document.querySelector("#link-ansi .filenamehead").textContent =
+          chunkName;
+        document.querySelector("#link-jp120 .filenamehead").textContent =
+          chunkName;
+        const buf = new Uint8Array(ab);
+        await runInPyodideWorker({
+          type: "load_file_start",
+          size: buf.length,
+        });
+        for (let i = 0; i < buf.length; i += WORKER_TRANSFER_CHUNK_SIZE) {
+          await runInPyodideWorker({
+            type: "load_file_chunk",
+            chunk: buf.slice(i, i + WORKER_TRANSFER_CHUNK_SIZE),
+          });
+        }
+        let { glyphs, familyName, name, weight } = await runInPyodideWorker({
+          type: "load_file_end",
+        });
+        document.querySelector(".fontname").textContent = name;
+        document.querySelector(
+          ".fontdesc"
+        ).textContent = `weight=${weight}, glyphs=${glyphs}`;
+        const ansiBuf = await runInPyodideWorker({
+          type: "make_subset",
+          u: "U+0020-00ff",
+        });
+        progressboxes[0].classList.add("done");
+        document.querySelector("#link-ansi").href = URL.createObjectURL(
+          new Blob([ansiBuf], { type: "font/woff2" })
+        );
+        document.querySelector("#link-ansi").download =
+          chunkName + "-ansi.woff2";
+        let i = 0;
+        const zip = new JSZip();
+        const unicodeRanges = await waitPromise(unicodeRangesPromise);
+        zip.file(
+          `${chunkName}.css`,
+          unicodeRanges
+            .map(
+              (c, i) => `font-face {
+        font-family: '${familyName}';
+        font-style: normal;
+        font-weight: ${weight};
+        font-display: swap;
+        src: url(./${chunkName}.${i}.woff2) format('woff2');
+        unicode-range: ${c};
+      }`
+            )
+            .join("\n"),
+          { encoding: "utf8" }
+        );
+        for (const u of unicodeRanges) {
+          const data = await runInPyodideWorker({
+            type: "make_subset",
+            u,
+          });
+          zip.file(`${chunkName}.${i}.woff2`, data);
+          progressboxes[i + 1].classList.add("done");
+          i++;
+        }
+        const content = await waitPromise(zip.generateAsync({ type: "blob" }));
+        document.querySelector("#link-jp120").href =
+          URL.createObjectURL(content);
+        document.querySelector("#link-jp120").download =
+          chunkName + "-jp120.zip";
+      };
+      pyodideWorker.onmessage = ({ data: { id, result } }) => {
+        //console.log(event.data);
+        pyodideWorkerCallbacks[id]?.[result !== -1 ? "resolve" : "reject"](
+          result
+        );
+      };
+      window.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "copy";
+        document.documentElement.classList.add("dragover");
+      });
+      window.addEventListener("dragleave", (e) => {
+        document.documentElement.classList.remove("dragover");
+      });
+      const tryLoadFile = (file) => {
+        const fileReader = new FileReader();
+        fileReader.onload = function () {
+          loadFileFromArrayBuffer(file.name, this.result);
+        };
+        fileReader.readAsArrayBuffer(file);
+      };
+      window.addEventListener("drop", (e) => {
+        document.documentElement.classList.remove("dragover");
+        const file = e.dataTransfer.files[0];
+        if ((file?.name || "").match(/\.(?:woff2?|ttf|otf)$/)) {
+          e.preventDefault();
+          tryLoadFile(file);
+        }
+      });
+      document
+        .querySelector(".dropzone-input")
+        .addEventListener("change", () => {
+          const file = document.querySelector(".dropzone-input").files[0];
+          if ((file?.name || "").match(/\.(?:woff2?|ttf|otf)$/)) {
+            tryLoadFile(file);
+          }
+        });
+      document.querySelector(".dropzone").addEventListener("click", (e) => {
+        document.querySelector(".dropzone-input").click();
+      });
+    </script>
+  </body>
+</html>
