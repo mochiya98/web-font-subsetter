@@ -207,7 +207,7 @@
       </div>
     </div>
 
-    <script src="./jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
     <script>
       const progressboxlist = document.querySelector(".progressboxlist");
       const unicodeRangesPromise = fetch(
@@ -217,185 +217,321 @@
         .then((c) =>
           c.match(/unicode-range:\s*[^;]+/g).map((c) => c.slice(14).trimStart())
         );
-      unicodeRangesPromise.then((c) => console.log(c));
-      const progressboxesPromise = unicodeRangesPromise.then((c) =>
+      const parseUnicodeRange = (unicodeRange) =>
+        unicodeRange.split(",").map((range) => {
+          const match = range
+            .trim()
+            .match(/^U\+([0-9a-f?]{1,6})(?:-([0-9a-f]{1,6}))?$/i);
+          if (!match) {
+            throw new Error(`Invalid unicode-range: ${range}`);
+          }
+          const start = parseInt(match[1].replace(/\?/g, "0"), 16);
+          const end = parseInt(
+            (match[2] || match[1]).replace(/\?/g, "f"),
+            16
+          );
+          return [start, end];
+        });
+      const makeRemainingUnicodeRange = (unicodeRanges) => {
+        const coveredRanges = unicodeRanges
+          .flatMap(parseUnicodeRange)
+          .sort((a, b) => a[0] - b[0])
+          .reduce((merged, range) => {
+            const previous = merged.at(-1);
+            if (previous && range[0] <= previous[1] + 1) {
+              previous[1] = Math.max(previous[1], range[1]);
+            } else {
+              merged.push([...range]);
+            }
+            return merged;
+          }, []);
+        const unicodeScalarRanges = [
+          [0x000000, 0x00d7ff],
+          [0x00e000, 0x10ffff],
+        ];
+        const remainingRanges = [];
+        for (const [unicodeStart, unicodeEnd] of unicodeScalarRanges) {
+          let start = unicodeStart;
+          for (const [coveredStart, coveredEnd] of coveredRanges) {
+            if (coveredEnd < start) continue;
+            if (coveredStart > unicodeEnd) break;
+            if (coveredStart > start) {
+              remainingRanges.push([
+                start,
+                Math.min(coveredStart - 1, unicodeEnd),
+              ]);
+            }
+            start = Math.max(start, coveredEnd + 1);
+            if (start > unicodeEnd) break;
+          }
+          if (start <= unicodeEnd) remainingRanges.push([start, unicodeEnd]);
+        }
+        return remainingRanges
+          .map(([start, end]) => {
+            const startHex = start.toString(16).toUpperCase().padStart(4, "0");
+            const endHex = end.toString(16).toUpperCase().padStart(4, "0");
+            return start === end
+              ? `U+${startHex}`
+              : `U+${startHex}-${endHex}`;
+          })
+          .join(", ");
+      };
+      const outputUnicodeRangesPromise = unicodeRangesPromise.then((ranges) => [
+        ...ranges,
+        makeRemainingUnicodeRange(ranges),
+      ]);
+      outputUnicodeRangesPromise.then((c) => console.log(c));
+      const progressboxesPromise = outputUnicodeRangesPromise.then((c) =>
         [...new Array(c.length + 1)].map(() =>
           progressboxlist.appendChild(document.createElement("div"))
         )
       );
+      const PYODIDE_BASE_URL =
+        "https://cdn.jsdelivr.net/pyodide/v314.0.3/full/";
       const workerScript = `
-            importScripts("${
-              location.origin.startsWith("http")
-                ? location.href.replace(/\/[^/]*$/, "/pyodide/")
-                : "https://cdn.jsdelivr.net/pyodide/v0.24.0/full/"
-            }pyodide.js");
+            import { loadPyodide } from "${PYODIDE_BASE_URL}pyodide.mjs";
 
             let pyodide;
+            let subsetMain;
             async function loadPyodideAndPackages() {
-              pyodide = await loadPyodide();
-              self.postMessage({ type:"pyodide_loaded" });
-              await pyodide.loadPackage(["fonttools","brotli"]);
-              self.postMessage({ type:"pyodide_lib_loaded" });
+              pyodide = await loadPyodide({
+                indexURL: "${PYODIDE_BASE_URL}",
+              });
+              await pyodide.loadPackage(["fonttools", "brotli"]);
+              subsetMain = await pyodide.runPythonAsync(
+                "from fontTools.subset import main\\nmain"
+              );
             }
-            let pyodideReadyPromise = loadPyodideAndPackages();
-            let inputFontFileData = null;
-            let inputFontFileLoadIdx = 0;
+            const pyodideReadyPromise = loadPyodideAndPackages();
             let sid = null;
 
             self.onmessage = async (event) => {
-              let result = 0;
-              let {id, type} = event.data;
-              if(type==="init")sid=event.data.sid;
-              try{
-                if(event.data.sid!==sid)throw new Error("invalid sid");
-                if(type==="load_file_start"){
-                  inputFontFileData=new Uint8Array(event.data.size);
-                  inputFontFileLoadIdx = 0;
-                  sid=event.data.sid;
-                }else if(type==="load_file_chunk"){
-                  inputFontFileData.set(event.data.chunk, inputFontFileLoadIdx);
-                  inputFontFileLoadIdx += event.data.chunk.length;
-                }else if(type==="load_file_end"){
-                  await (async (data)=>{
-                      await pyodideReadyPromise;
-                      pyodide.FS.writeFile("/tmp.bin", data);
-                  })(inputFontFileData);
-                  let [glyphs,weight,familyName,name] = await pyodide.runPythonAsync("from fontTools import ttLib\\nfont=ttLib.TTFont('/tmp.bin')\\n(len(font.getGlyphOrder()),font['OS/2'].usWeightClass,font['name'].getDebugName(16) or font['name'].getDebugName(1),font['name'].getDebugName(4),)");
-                  pyodide.FS.rename("/tmp.bin", "/input.bin");
-                  result = {glyphs,weight,familyName,name};
-                }else if(type==="make_subset"){
-                  const subsetMain = await pyodide.runPythonAsync("from fontTools.subset import main\\nmain")
-                  subsetMain(['/input.bin','--output-file=/out.woff2','--flavor=woff2','--desubroutinize','--layout-features=*','--unicodes='+event.data.u]);
+              const { id, type } = event.data;
+              if (type === "init") {
+                sid = event.data.sid;
+                return;
+              }
+
+              let result = null;
+              try {
+                if (event.data.sid !== sid) throw new Error("invalid sid");
+
+                if (type === "load_file") {
+                  await pyodideReadyPromise;
+                  const data = new Uint8Array(await event.data.file.arrayBuffer());
+                  pyodide.FS.writeFile("/input.bin", data);
+                  const [glyphs, weight, familyName, name] =
+                    await pyodide.runPythonAsync(
+                      "from fontTools import ttLib\\n" +
+                        "font=ttLib.TTFont('/input.bin', lazy=True)\\n" +
+                        "info=(len(font.getGlyphOrder()),font['OS/2'].usWeightClass,font['name'].getDebugName(16) or font['name'].getDebugName(1),font['name'].getDebugName(4),)\\n" +
+                        "font.close()\\n" +
+                        "info"
+                    );
+                  result = { glyphs, weight, familyName, name };
+                } else if (type === "make_subset") {
+                  await pyodideReadyPromise;
+                  subsetMain([
+                    "/input.bin",
+                    "--output-file=/out.woff2",
+                    "--flavor=woff2",
+                    "--desubroutinize",
+                    "--layout-features=*",
+                    "--unicodes=" + event.data.u,
+                  ]);
                   result = pyodide.FS.readFile("/out.woff2");
                 }
-              }catch(e){
-                result = -1;
+              } catch (error) {
+                result = { __error: error?.message || String(error) };
               }
-              self.postMessage({ id, result });
+
+              if (result instanceof Uint8Array) {
+                self.postMessage({ id, result }, [result.buffer]);
+              } else {
+                self.postMessage({ id, result });
+              }
             };
             `;
-      const WORKER_TRANSFER_CHUNK_SIZE = 102400;
-      const pyodideWorker = new Worker(
-        URL.createObjectURL(
-          new Blob([workerScript], {
-            type: "text/javascript",
-          })
-        )
+      const MAX_PYODIDE_WORKERS = 2;
+      const PYODIDE_WORKER_COUNT = Math.min(
+        MAX_PYODIDE_WORKERS,
+        Math.max(1, Math.floor((navigator.hardwareConcurrency || 2) / 2))
       );
-      let pyodideWorkerCallbacks = {};
+
+      const createWorkerClient = () => {
+        const workerUrl = URL.createObjectURL(
+          new Blob([workerScript], { type: "text/javascript" })
+        );
+        const worker = new Worker(workerUrl, { type: "module" });
+        const callbacks = new Map();
+
+        worker.onmessage = ({ data: { id, result } }) => {
+          const callback = callbacks.get(id);
+          if (!callback) return;
+          callbacks.delete(id);
+          if (result?.__error) {
+            callback.reject(new Error(result.__error));
+          } else {
+            callback.resolve(result);
+          }
+        };
+
+        worker.onerror = (event) => {
+          const error = new Error(event.message || "Worker error");
+          for (const { reject } of callbacks.values()) reject(error);
+          callbacks.clear();
+        };
+
+        const rejectPending = () => {
+          for (const { reject } of callbacks.values()) {
+            reject(new Error("cancelled"));
+          }
+          callbacks.clear();
+        };
+
+        const run = (sid, data) =>
+          new Promise((resolve, reject) => {
+            const id =
+              crypto.randomUUID?.() || Math.random().toString(36).slice(2);
+            callbacks.set(id, { resolve, reject });
+            worker.postMessage({ id, sid, ...data });
+          });
+
+        return { worker, run, rejectPending };
+      };
+
+      // 複数のPyodide Workerを先に起動し、独立したサブセットを並列生成する。
+      const pyodideWorkers = Array.from(
+        { length: PYODIDE_WORKER_COUNT },
+        createWorkerClient
+      );
       let currentSid = null;
-      const startPyodidePipeline = async () => {
-        Object.values(pyodideWorkerCallbacks).map((c) => c.reject(-1));
-        pyodideWorkerCallbacks = {};
-        const sid = Math.random().toString(36).slice(2);
+
+      const startPyodidePipeline = () => {
+        pyodideWorkers.forEach(({ rejectPending }) => rejectPending());
+        const sid =
+          crypto.randomUUID?.() || Math.random().toString(36).slice(2);
         currentSid = sid;
+        pyodideWorkers.forEach(({ worker }) =>
+          worker.postMessage({ id: null, sid, type: "init" })
+        );
+
         const waitPromise = async (promise) => {
           const result = await promise;
-          if (currentSid !== sid) throw new Error();
+          if (currentSid !== sid) throw new Error("cancelled");
           return result;
         };
-        const runInPyodideWorker = (data) => {
-          const id = Math.random().toString(36).slice(2);
-          return waitPromise(
-            new Promise((resolve, reject) => {
-              pyodideWorkerCallbacks[id] = { resolve, reject };
-              pyodideWorker.postMessage({ id, sid, ...data });
-            })
-          );
-        };
-        pyodideWorker.postMessage({ id: null, sid, type: "init" });
+
+        const runInPyodideWorker = (workerIndex, data) =>
+          waitPromise(pyodideWorkers[workerIndex].run(sid, data));
+
         return { runInPyodideWorker, waitPromise };
       };
 
-      const loadFileFromArrayBuffer = async (fn, ab) => {
-        const { runInPyodideWorker, waitPromise } =
-          await startPyodidePipeline();
+      let ansiObjectUrl = null;
+      let chunksObjectUrl = null;
+
+      const loadFontFile = async (file) => {
+        const { runInPyodideWorker, waitPromise } = startPyodidePipeline();
         const progressboxes = await progressboxesPromise;
-        document.querySelector(".app-start").style.display = "none";
-        document.querySelector(".app-result").style.display = "block";
-        document.querySelector(".fontname").textContent = "Loading...";
-        if (document.querySelector("#link-ansi").href) {
-          URL.revokeObjectURL(document.querySelector("#link-ansi").href);
-        }
-        if (document.querySelector("#link-jpchunks").href) {
-          URL.revokeObjectURL(document.querySelector("#link-jpchunks").href);
-        }
-        document.querySelector("#link-ansi").removeAttribute("href");
-        document.querySelector("#link-jpchunks").removeAttribute("href");
-        progressboxes.forEach((c) => c.classList.remove("done"));
-        const chunkName = fn.replace(/\.[^.]+$/, "");
+        const appStart = document.querySelector(".app-start");
+        const appResult = document.querySelector(".app-result");
+        const fontName = document.querySelector(".fontname");
+        const fontDesc = document.querySelector(".fontdesc");
+        const ansiLink = document.querySelector("#link-ansi");
+        const chunksLink = document.querySelector("#link-jpchunks");
+
+        appStart.style.display = "none";
+        appResult.style.display = "block";
+        fontName.textContent = "Loading...";
+
+        if (ansiObjectUrl) URL.revokeObjectURL(ansiObjectUrl);
+        if (chunksObjectUrl) URL.revokeObjectURL(chunksObjectUrl);
+        ansiObjectUrl = null;
+        chunksObjectUrl = null;
+        ansiLink.removeAttribute("href");
+        chunksLink.removeAttribute("href");
+        progressboxes.forEach((box) => box.classList.remove("done"));
+
+        const chunkName = file.name.replace(/\.[^.]+$/, "");
         document.querySelector("#link-ansi .filenamehead").textContent =
           chunkName;
         document.querySelector("#link-jpchunks .filenamehead").textContent =
           chunkName;
-        const buf = new Uint8Array(ab);
-        await runInPyodideWorker({
-          type: "load_file_start",
-          size: buf.length,
-        });
-        for (let i = 0; i < buf.length; i += WORKER_TRANSFER_CHUNK_SIZE) {
-          await runInPyodideWorker({
-            type: "load_file_chunk",
-            chunk: buf.slice(i, i + WORKER_TRANSFER_CHUNK_SIZE),
-          });
-        }
-        let { glyphs, familyName, name, weight } = await runInPyodideWorker({
-          type: "load_file_end",
-        });
-        document.querySelector(".fontname").textContent = name;
-        document.querySelector(
-          ".fontdesc"
-        ).textContent = `weight=${weight}, glyphs=${glyphs}`;
-        const ansiBuf = await runInPyodideWorker({
-          type: "make_subset",
-          u: "U+0020-00ff",
-        });
-        progressboxes[0].classList.add("done");
-        document.querySelector("#link-ansi").href = URL.createObjectURL(
-          new Blob([ansiBuf], { type: "font/woff2" })
+
+        // File/Blobを直接渡し、100KBごとのpostMessage往復とsliceを削除する。
+        const loadResults = await Promise.all(
+          pyodideWorkers.map((_, workerIndex) =>
+            runInPyodideWorker(workerIndex, { type: "load_file", file })
+          )
         );
-        document.querySelector("#link-ansi").download =
-          chunkName + "-ansi.woff2";
-        let i = 0;
+        const { glyphs, familyName, name, weight } = loadResults[0];
+        fontName.textContent = name;
+        fontDesc.textContent = `weight=${weight}, glyphs=${glyphs}`;
+
+        const outputUnicodeRanges = await waitPromise(
+          outputUnicodeRangesPromise
+        );
         const zip = new JSZip();
-        const unicodeRanges = await waitPromise(unicodeRangesPromise);
         zip.file(
           `${chunkName}.css`,
-          unicodeRanges
+          outputUnicodeRanges
             .map(
-              (c, i) => `@font-face {
+              (unicodeRange, index) => `@font-face {
         font-family: '${familyName}';
         font-style: normal;
         font-weight: ${weight};
         font-display: swap;
-        src: url(./${chunkName}.${i}.woff2) format('woff2');
-        unicode-range: ${c};
+        src: url(./${chunkName}.${index}.woff2) format('woff2');
+        unicode-range: ${unicodeRange};
       }`
             )
             .join("\n"),
           { encoding: "utf8" }
         );
-        for (const u of unicodeRanges) {
-          const data = await runInPyodideWorker({
-            type: "make_subset",
-            u,
-          });
-          zip.file(`${chunkName}.${i}.woff2`, data);
-          progressboxes[i + 1].classList.add("done");
-          i++;
-        }
-        const content = await waitPromise(zip.generateAsync({ type: "blob" }));
-        document.querySelector("#link-jpchunks").href =
-          URL.createObjectURL(content);
-        document.querySelector("#link-jpchunks").download =
-          chunkName + "-jpchunks.zip";
-      };
-      pyodideWorker.onmessage = ({ data: { id, result } }) => {
-        //console.log(event.data);
-        pyodideWorkerCallbacks[id]?.[result !== -1 ? "resolve" : "reject"](
-          result
+
+        // Worker 0がANSIを処理している間、他のWorkerは日本語チャンクを進める。
+        const ansiPromise = runInPyodideWorker(0, {
+          type: "make_subset",
+          u: "U+0020-00ff",
+        }).then((ansiBuf) => {
+          progressboxes[0].classList.add("done");
+          ansiObjectUrl = URL.createObjectURL(
+            new Blob([ansiBuf], { type: "font/woff2" })
+          );
+          ansiLink.href = ansiObjectUrl;
+          ansiLink.download = chunkName + "-ansi.woff2";
+        });
+
+        let nextRangeIndex = 0;
+        const processRanges = async (workerIndex) => {
+          if (workerIndex === 0) await ansiPromise;
+
+          while (true) {
+            const rangeIndex = nextRangeIndex++;
+            if (rangeIndex >= outputUnicodeRanges.length) return;
+            const data = await runInPyodideWorker(workerIndex, {
+              type: "make_subset",
+              u: outputUnicodeRanges[rangeIndex],
+            });
+            zip.file(`${chunkName}.${rangeIndex}.woff2`, data);
+            progressboxes[rangeIndex + 1].classList.add("done");
+          }
+        };
+
+        await Promise.all([
+          ansiPromise,
+          ...pyodideWorkers.map((_, workerIndex) => processRanges(workerIndex)),
+        ]);
+
+        const content = await waitPromise(
+          zip.generateAsync({ type: "blob", streamFiles: true })
         );
+        chunksObjectUrl = URL.createObjectURL(content);
+        chunksLink.href = chunksObjectUrl;
+        chunksLink.download = chunkName + "-jpchunks.zip";
       };
+
       window.addEventListener("dragover", (e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = "copy";
@@ -405,17 +541,19 @@
         document.documentElement.classList.remove("dragover");
       });
       const tryLoadFile = (file) => {
-        const fileReader = new FileReader();
-        fileReader.onload = function () {
-          loadFileFromArrayBuffer(file.name, this.result);
-        };
-        fileReader.readAsArrayBuffer(file);
+        loadFontFile(file).catch((error) => {
+          if (error.message === "cancelled") return;
+          console.error(error);
+          document.querySelector(".fontname").textContent = "Error";
+          document.querySelector(".fontdesc").textContent = error.message;
+        });
       };
+
       window.addEventListener("drop", (e) => {
+        e.preventDefault();
         document.documentElement.classList.remove("dragover");
         const file = e.dataTransfer.files[0];
         if ((file?.name || "").match(/\.(?:woff2?|ttf|otf)$/)) {
-          e.preventDefault();
           tryLoadFile(file);
         }
       });
